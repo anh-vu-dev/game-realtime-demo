@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Game WebSocket Test Client</title>
+    <script src="https://cdn.jsdelivr.net/npm/sockjs-client@1/dist/sockjs.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/stompjs@2.3.3/lib/stomp.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            line-height: 1.5;
+        }
+
+        h2 {
+            margin-bottom: 10px;
+        }
+
+        .section {
+            margin-bottom: 18px;
+            padding: 12px;
+            border: 1px solid #ccc;
+            border-radius: 8px;
+        }
+
+        .row {
+            margin-bottom: 10px;
+        }
+
+        label {
+            display: inline-block;
+            min-width: 130px;
+        }
+
+        input {
+            padding: 4px 6px;
+            width: 180px;
+        }
+
+        button {
+            margin-right: 8px;
+            margin-bottom: 8px;
+            padding: 8px 12px;
+            cursor: pointer;
+        }
+
+        button:disabled {
+            cursor: not-allowed;
+            opacity: 0.5;
+        }
+
+        .status {
+            font-weight: bold;
+        }
+
+        pre {
+            background: #111;
+            color: #0f0;
+            padding: 12px;
+            height: 260px;
+            overflow-y: auto;
+            overflow-x: auto;
+            border-radius: 8px;
+            white-space: pre-wrap;
+            word-break: break-word;
+            resize: vertical;
+        }
+    </style>
+</head>
+<body>
+<h2>Spring Boot Realtime Game Client</h2>
+
+<div class="section">
+    <h3>Configuration</h3>
+
+    <div class="row">
+        <label for="serverUrl">Server URL</label>
+        <input id="serverUrl" value="http://localhost:8080/ws-game">
+    </div>
+
+    <div class="row">
+        <label for="roomId">Room ID</label>
+        <input id="roomId" value="room1">
+    </div>
+
+    <div class="row">
+        <label for="playerId">Player ID</label>
+        <input id="playerId" value="p1">
+    </div>
+
+    <div class="row">
+        <label for="playerName">Player Name</label>
+        <input id="playerName" value="Vu">
+    </div>
+</div>
+
+<div class="section">
+    <h3>Status</h3>
+
+    <div class="row">
+        Connection: <span id="connectionStatus" class="status">Disconnected</span>
+    </div>
+    <div class="row">
+        Subscription: <span id="subscriptionStatus" class="status">None</span>
+    </div>
+    <div class="row">
+        Role: <span id="roleStatus" class="status">Viewer</span>
+    </div>
+</div>
+
+<div class="section">
+    <h3>Controls</h3>
+
+    <div class="row">
+        <button id="btnConnect" onclick="connect()">Connect</button>
+        <button id="btnDisconnect" onclick="disconnect()">Disconnect</button>
+    </div>
+
+    <div class="row">
+        <button id="btnSubscribe" onclick="subscribeToRoom()">Subscribe</button>
+        <button id="btnUnsubscribe" onclick="unsubscribeFromRoom()">Unsubscribe</button>
+    </div>
+
+    <div class="row">
+        <button id="btnJoin" onclick="joinRoom()">Join</button>
+        <button id="btnLeave" onclick="leaveRoom()">Leave</button>
+    </div>
+</div>
+
+<div class="section">
+    <h3>Battle</h3>
+
+    <div class="row">
+        <button id="btnMove" onclick="move()">Move</button>
+        <button id="btnAttack" onclick="attack()">Attack</button>
+        <label for="targetPlayerId">Target Player ID</label>
+        <input id="targetPlayerId" value="p2">
+    </div>
+</div>
+
+<div class="section">
+    <h3>Event Log &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<button onclick="clearLog()">Clear Log</button> </h3>
+    <pre id="log"></pre>
+</div>
+
+<script>
+    let stompClient = null;
+    let roomSubscription = null;
+
+    let isConnected = false;
+    let isSubscribed = false;
+    let hasJoinedRoom = false;
+
+    let currentSubscribedRoom = null;
+    let currentJoinedRoom = null;
+    let currentBoundPlayerId = null;
+
+    function log(message) {
+        const logBox = document.getElementById("log");
+        const maxLines = 500;
+
+        let lines = logBox.textContent.split("\n");
+        lines.push(message);
+
+        if (lines.length > maxLines) {
+            lines = lines.slice(lines.length - maxLines);
+        }
+
+        logBox.textContent = lines.join("\n");
+        logBox.scrollTop = logBox.scrollHeight;
+    }
+
+    function clearLog() {
+        document.getElementById("log").textContent = "";
+    }
+
+    function getServerUrl() {
+        return document.getElementById("serverUrl").value.trim();
+    }
+
+    function getRoomId() {
+        return document.getElementById("roomId").value.trim();
+    }
+
+    function getPlayerId() {
+        return document.getElementById("playerId").value.trim();
+    }
+
+    function getPlayerName() {
+        return document.getElementById("playerName").value.trim();
+    }
+
+    function getTargetPlayerId() {
+        return document.getElementById("targetPlayerId").value.trim();
+    }
+
+    function setConnectionStatus(value) {
+        document.getElementById("connectionStatus").textContent = value;
+    }
+
+    function setSubscriptionStatus(value) {
+        document.getElementById("subscriptionStatus").textContent = value;
+    }
+
+    function setRoleStatus(value) {
+        document.getElementById("roleStatus").textContent = value;
+    }
+
+    function updateStatusLabels() {
+        setConnectionStatus(isConnected ? "Connected" : "Disconnected");
+        setSubscriptionStatus(isSubscribed ? currentSubscribedRoom : "None");
+
+        if (hasJoinedRoom) {
+            setRoleStatus("Player (" + currentBoundPlayerId + ") in " + currentJoinedRoom);
+        } else if (isSubscribed) {
+            setRoleStatus("Viewer");
+        } else {
+            setRoleStatus("Viewer");
+        }
+    }
+
+    function updateUiState() {
+        const btnConnect = document.getElementById("btnConnect");
+        const btnDisconnect = document.getElementById("btnDisconnect");
+        const btnSubscribe = document.getElementById("btnSubscribe");
+        const btnUnsubscribe = document.getElementById("btnUnsubscribe");
+        const btnJoin = document.getElementById("btnJoin");
+        const btnMove = document.getElementById("btnMove");
+        const btnAttack = document.getElementById("btnAttack");
+        const btnLeave = document.getElementById("btnLeave");
+
+        const roomIdInput = document.getElementById("roomId");
+        const playerIdInput = document.getElementById("playerId");
+        const playerNameInput = document.getElementById("playerName");
+        const targetPlayerIdInput = document.getElementById("targetPlayerId");
+        const serverUrlInput = document.getElementById("serverUrl");
+
+        btnConnect.disabled = isConnected;
+        btnDisconnect.disabled = !isConnected;
+
+        btnSubscribe.disabled = !isConnected || hasJoinedRoom || isSubscribed;
+        btnUnsubscribe.disabled = !isConnected || hasJoinedRoom || !isSubscribed;
+
+        btnJoin.disabled = !isConnected || !isSubscribed || hasJoinedRoom;
+        btnMove.disabled = !hasJoinedRoom;
+        btnAttack.disabled = !hasJoinedRoom;
+        btnLeave.disabled = !hasJoinedRoom;
+
+        serverUrlInput.disabled = isConnected;
+        roomIdInput.disabled = hasJoinedRoom;
+        playerIdInput.disabled = hasJoinedRoom;
+        playerNameInput.disabled = hasJoinedRoom;
+        targetPlayerIdInput.disabled = !hasJoinedRoom;
+
+        updateStatusLabels();
+    }
+
+    function resetAllState() {
+        isConnected = false;
+        isSubscribed = false;
+        hasJoinedRoom = false;
+
+        currentSubscribedRoom = null;
+        currentJoinedRoom = null;
+        currentBoundPlayerId = null;
+
+        roomSubscription = null;
+        stompClient = null;
+
+        updateUiState();
+    }
+
+    function connect() {
+        const serverUrl = getServerUrl();
+        if (!serverUrl) {
+            log("Cannot connect. Server URL is empty.");
+            return;
+        }
+
+        const socket = new SockJS(serverUrl);
+        stompClient = Stomp.over(socket);
+
+        stompClient.connect({}, function () {
+            isConnected = true;
+            log("Connected.");
+            updateUiState();
+        }, function (error) {
+            log("Connection error: " + error);
+            resetAllState();
+        });
+    }
+
+    function disconnect() {
+        if (!isConnected || !stompClient) {
+            log("Cannot disconnect. Not connected.");
+            return;
+        }
+
+        if (hasJoinedRoom) {
+            log("Disconnecting while joined. Server should clean up session.");
+        }
+
+        if (roomSubscription) {
+            roomSubscription.unsubscribe();
+            roomSubscription = null;
+        }
+
+        stompClient.disconnect(function () {
+            log("Disconnected.");
+            resetAllState();
+        });
+    }
+
+    function subscribeToRoom() {
+        if (!isConnected || !stompClient || !stompClient.connected) {
+            log("Cannot subscribe. Not connected.");
+            return;
+        }
+
+        const roomId = getRoomId();
+        if (!roomId) {
+            log("Cannot subscribe. Room ID is empty.");
+            return;
+        }
+
+        if (hasJoinedRoom) {
+            log("Cannot subscribe to another room while joined.");
+            return;
+        }
+
+        if (roomSubscription) {
+            roomSubscription.unsubscribe();
+            log("Unsubscribed from room: " + currentSubscribedRoom);
+            roomSubscription = null;
+        }
+
+        roomSubscription = stompClient.subscribe("/topic/room." + roomId, function (message) {
+            log("RECEIVED [" + roomId + "]: " + message.body);
+        });
+
+        isSubscribed = true;
+        currentSubscribedRoom = roomId;
+
+        log("Subscribed to room: " + roomId);
+        updateUiState();
+    }
+
+    function unsubscribeFromRoom() {
+        if (!isConnected) {
+            log("Cannot unsubscribe. Not connected.");
+            return;
+        }
+
+        if (hasJoinedRoom) {
+            log("Cannot unsubscribe while joined. Leave the room first.");
+            return;
+        }
+
+        if (!isSubscribed || !roomSubscription) {
+            log("Cannot unsubscribe. No active room subscription.");
+            return;
+        }
+
+        roomSubscription.unsubscribe();
+        log("Unsubscribed from room: " + currentSubscribedRoom);
+
+        roomSubscription = null;
+        isSubscribed = false;
+        currentSubscribedRoom = null;
+
+        updateUiState();
+    }
+
+    function ensureSubscribedRoomMatchesInput() {
+        const roomId = getRoomId();
+
+        if (!isSubscribed) {
+            log("No room subscription found. Subscribing now...");
+            subscribeToRoom();
+            return;
+        }
+
+        if (currentSubscribedRoom !== roomId) {
+            log("Room input differs from current subscription. Re-subscribing to: " + roomId);
+            subscribeToRoom();
+        }
+    }
+
+    function joinRoom() {
+        if (!isConnected) {
+            log("Cannot join. Not connected.");
+            return;
+        }
+
+        if (hasJoinedRoom) {
+            log("Cannot join. Already joined room: " + currentJoinedRoom);
+            return;
+        }
+
+        const roomId = getRoomId();
+        const playerId = getPlayerId();
+        const playerName = getPlayerName();
+
+        if (!roomId || !playerId || !playerName) {
+            log("Cannot join. Room ID, Player ID, and Player Name are required.");
+            return;
+        }
+
+        ensureSubscribedRoomMatchesInput();
+
+        if (!isSubscribed) {
+            log("Cannot join. Subscription failed.");
+            return;
+        }
+
+        stompClient.send("/app/game.action", {}, JSON.stringify({
+            type: "JOIN",
+            roomId: roomId,
+            playerId: playerId,
+            playerName: playerName,
+            x: 0,
+            y: 0
+        }));
+
+        hasJoinedRoom = true;
+        currentJoinedRoom = roomId;
+        currentBoundPlayerId = playerId;
+
+        log("JOIN sent for player " + playerId + " in room " + roomId);
+        updateUiState();
+    }
+
+    function move() {
+        if (!hasJoinedRoom) {
+            log("Cannot move. You have not joined a room.");
+            return;
+        }
+
+        const x = Math.floor(Math.random() * 10);
+        const y = Math.floor(Math.random() * 10);
+
+        stompClient.send("/app/game.action", {}, JSON.stringify({
+            type: "MOVE",
+            roomId: currentJoinedRoom,
+            playerId: currentBoundPlayerId,
+            x: x,
+            y: y
+        }));
+
+        log("MOVE sent by " + currentBoundPlayerId + " to (" + x + "," + y + ")");
+    }
+
+    function attack() {
+        if (!hasJoinedRoom) {
+            log("Cannot attack. You have not joined a room.");
+            return;
+        }
+
+        const targetPlayerId = getTargetPlayerId();
+        if (!targetPlayerId) {
+            log("Cannot attack. Target Player ID is empty.");
+            return;
+        }
+
+        stompClient.send("/app/game.action", {}, JSON.stringify({
+            type: "ATTACK",
+            roomId: currentJoinedRoom,
+            playerId: currentBoundPlayerId,
+            targetPlayerId: targetPlayerId
+        }));
+
+        log("ATTACK sent by " + currentBoundPlayerId + " to target " + targetPlayerId);
+    }
+
+    function leaveRoom() {
+        if (!hasJoinedRoom) {
+            log("Cannot leave. You are not in a room.");
+            return;
+        }
+
+        stompClient.send("/app/game.action", {}, JSON.stringify({
+            type: "LEAVE",
+            roomId: currentJoinedRoom,
+            playerId: currentBoundPlayerId
+        }));
+
+        log("LEAVE sent for player " + currentBoundPlayerId + " from room " + currentJoinedRoom);
+
+        hasJoinedRoom = false;
+        currentJoinedRoom = null;
+        currentBoundPlayerId = null;
+
+        updateUiState();
+    }
+
+    updateUiState();
+</script>
+</body>
+</html>
