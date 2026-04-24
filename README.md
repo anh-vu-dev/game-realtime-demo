@@ -62,7 +62,12 @@ Open:
 test-client.html
 
 # Demo
+Backend: https://game-realtime-demo.onrender.com/
 
+WebSocket endpoint:
+wss://game-realtime-demo.onrender.com/ws-game
+
+Use `client/test-client.html` to interact with the system.
 
 # Future Improvements
 - Authentication (Spring Security + Principal)
