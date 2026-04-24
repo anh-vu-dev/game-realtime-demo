@@ -69,6 +69,9 @@ wss://game-realtime-demo.onrender.com/ws-game
 
 Use `client/test-client.html` to interact with the system.
 
+Note: The demo is hosted on Render free tier. 
+The service may go to sleep after inactivity and can take ~30–60 seconds to wake up on first request.
+
 # Future Improvements
 - Authentication (Spring Security + Principal)
 - Redis for distributed state
